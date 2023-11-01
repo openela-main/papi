@@ -1,0 +1,144 @@
+commit 3a6c9a855195e6f6f44ad6dffe2cd4046426ab53
+Author: Masahiko, Yamada <yamada.masahiko@fujitsu.com>
+Date:   Wed Nov 25 21:46:26 2020 +0900
+
+    fix for performance improvement of _mx_init_component() function
+
+diff --git a/src/components/mx/linux-mx.c b/src/components/mx/linux-mx.c
+index 2da406d14..34e6f02c2 100644
+--- a/src/components/mx/linux-mx.c
++++ b/src/components/mx/linux-mx.c
+@@ -224,26 +224,35 @@ _mx_init_component( int cidx )
+ {
+ 
+ 	FILE *fff;
+-	char test_string[BUFSIZ];
++	char *path;
++	int len, pathlen;
+ 
+ 	/* detect if MX available */
+ 
+-	strncpy(mx_counters_exe,"mx_counters 2> /dev/null",BUFSIZ);
+-	fff=popen(mx_counters_exe,"r");
+-	/* popen only returns NULL if "sh" fails, not the actual command */
+-	if (fgets(test_string,BUFSIZ,fff)==NULL) {
+-	   pclose(fff);
+-	   strncpy(mx_counters_exe,"./components/mx/utils/fake_mx_counters 2> /dev/null",BUFSIZ);
+-	   fff=popen(mx_counters_exe,"r");
+-	   if (fgets(test_string,BUFSIZ,fff)==NULL) {
+-	      pclose(fff);
+-	      /* neither real nor fake found */
+-	      strncpy(_mx_vector.cmp_info.disabled_reason,
+-		      "No MX utilities found",PAPI_MAX_STR_LEN);
+-	      return PAPI_ECMP;
++	path = getenv("PATH");
++	pathlen = strlen(path);
++	while(pathlen > 0) {
++	   len = strcspn(path, ":");
++	   strncpy(mx_counters_exe, path, len);
++	   mx_counters_exe[len] = '\0';
++	   strcat(mx_counters_exe, "/mx_counters");
++	   fff = fopen(mx_counters_exe, "r");
++	   if (fff != NULL) {
++	      strcat(mx_counters_exe, " 2> /dev/null");
++	      break;
+ 	   }
++	   pathlen = pathlen - len - 1;
++	   if (pathlen > 0) {
++	      path = path + len + 1;
++	   }
++	}
++	if (fff == NULL) {
++	   /* neither real nor fake found */
++	   strncpy(_mx_vector.cmp_info.disabled_reason,
++		   "No MX utilities found",PAPI_MAX_STR_LEN);
++	   return PAPI_ECMP;
+ 	}
+-	pclose(fff);
++	fclose(fff);
+ 
+ 	num_events=MX_MAX_COUNTERS;
+ 	_mx_vector.cmp_info.num_native_events=num_events;
+commit 3a2560a86be44f4b15d96a45eda8e7f387b9166c
+Author: Masahiko, Yamada <yamada.masahiko@fujitsu.com>
+Date:   Tue Jan 26 16:30:40 2021 +0900
+
+    Add string length check before strncpy() and strcat() calls in _mx_init_component()
+    
+    Myrinet Express-related component MX modules are initialized with the _mx_init_component() function,
+    which is called from the PAPI_library_init() function.
+    The popen(3) call runs a loadable module called "mx_counters",
+    and if the loadable module does not exist,
+    it attempts to run a loadable module called "./components/mx/utils/fake_mx_counters".
+    In an environment where there are no "mx_counters" and "./components/mx/utils/fake_mx_counters" loadable modules,
+    popen(3) will be called twice uselessly.
+    popen(3) internally calls pipe(2) once, fork(2) twice and exec(2) once.
+    
+    The size of the user space of the application calling the PAPI_library_init() function affects the performance of fork(2),
+    which is called as an extension of popen(3).
+    As a result, the performance of the PAPI_library_init() function is affected by the amount of user space in the application
+    that called the PAPI_library_init() function.
+    
+    In the _mx_init_component() function,
+    the MX module only needs to be able to verify that a load module named "mx_counters" exists.
+    We improved the _mx_init_component() function to call fopen(3) instead of popen(3).
+    We add string length check before strncpy() and strcat() calls in _mx_init_component() function.
+
+diff --git a/src/components/mx/linux-mx.c b/src/components/mx/linux-mx.c
+index 34e6f02c2..c2920d65b 100644
+--- a/src/components/mx/linux-mx.c
++++ b/src/components/mx/linux-mx.c
+@@ -225,7 +225,7 @@ _mx_init_component( int cidx )
+ 
+ 	FILE *fff;
+ 	char *path;
+-	int len, pathlen;
++	int checklen, len, pathlen;
+ 
+ 	/* detect if MX available */
+ 
+@@ -233,13 +233,31 @@ _mx_init_component( int cidx )
+ 	pathlen = strlen(path);
+ 	while(pathlen > 0) {
+ 	   len = strcspn(path, ":");
+-	   strncpy(mx_counters_exe, path, len);
++	   if (len < BUFSIZ) {
++	      strncpy(mx_counters_exe, path, len);
++	   } else {
++	      fff = NULL;
++	      break;
++	   }
+ 	   mx_counters_exe[len] = '\0';
+-	   strcat(mx_counters_exe, "/mx_counters");
++	   checklen = len + strlen("/mx_counters");
++	   if (checklen < BUFSIZ) {
++	      strcat(mx_counters_exe, "/mx_counters");
++	   } else {
++	      fff = NULL;
++	      break;
++	   }
+ 	   fff = fopen(mx_counters_exe, "r");
+ 	   if (fff != NULL) {
+-	      strcat(mx_counters_exe, " 2> /dev/null");
+-	      break;
++	      checklen = checklen + strlen(" 2> /dev/null");
++	      if (checklen < BUFSIZ) {
++	         strcat(mx_counters_exe, " 2> /dev/null");
++	         break;
++	      } else {
++	         fclose(fff);
++	         fff = NULL;
++	         break;
++	      }
+ 	   }
+ 	   pathlen = pathlen - len - 1;
+ 	   if (pathlen > 0) {
+@@ -247,7 +265,7 @@ _mx_init_component( int cidx )
+ 	   }
+ 	}
+ 	if (fff == NULL) {
+-	   /* neither real nor fake found */
++	   /* mx_counters not found */
+ 	   strncpy(_mx_vector.cmp_info.disabled_reason,
+ 		   "No MX utilities found",PAPI_MAX_STR_LEN);
+ 	   return PAPI_ECMP;

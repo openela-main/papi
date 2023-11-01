@@ -1,0 +1,607 @@
+commit 660bfd20bc89a26629e99de958d38b031db4250d
+Author: William Cohen <wcohen@redhat.com>
+Date:   Thu Oct 31 15:30:00 2019 -0400
+
+    This code is a modification of krentel_pthreads.c, to better test
+    some race conditions. It is not included in the standard tests;
+    it is a diagnostic that should be run with "valgrind --tool=helgrind".
+    
+    Signed-off-by: Anthony Castaldo <TonyCastaldo@icl.utk.edu>
+
+diff --git a/src/ctests/krentel_pthreads_race.c b/src/ctests/krentel_pthreads_race.c
+new file mode 100644
+index 000000000..0ebfb5056
+--- /dev/null
++++ b/src/ctests/krentel_pthreads_race.c
+@@ -0,0 +1,236 @@
++/*
++ *  Test PAPI with multiple threads.
++ *  This code is a modification of krentel_pthreads.c by William Cohen
++ *  <wcohen@redhat.com>, on Sep 10 2019, to exercise and test for the race
++ *  condition in papi_internal.c involving the formerly static variables
++ *  papi_event_code and papi_event_code_changed.  This code should be run with
++ *  "valgrind --tool=helgrind" to show any data races. If run with:
++ *  "valgrind --tool=helgrind --log-file=helgrind_out.txt"
++ *  The output will be captured in helgrind_out.txt and can then be processed
++ *  with the program filter_helgrind.c; see commentary at the top of that file.
++ */
++
++#define MAX_THREADS 256
++
++#include <stdio.h>
++#include <stdlib.h>
++#include <pthread.h>
++#include <sys/time.h>
++
++#include "papi.h"
++#include "papi_test.h"
++
++#define EVENT  PAPI_TOT_CYC
++
++static int program_time = 5;
++static int threshold = 20000000;
++static int num_threads = 3;
++
++static long count[MAX_THREADS];
++static long iter[MAX_THREADS];
++static struct timeval last[MAX_THREADS];
++
++static pthread_key_t key;
++
++static struct timeval start;
++
++static void
++my_handler( int EventSet, void *pc, long long ovec, void *context )
++{
++	( void ) EventSet;
++	( void ) pc;
++	( void ) ovec;
++	( void ) context;
++
++	long num = ( long ) pthread_getspecific( key );
++
++	if ( num < 0 || num > num_threads )
++		test_fail( __FILE__, __LINE__, "getspecific failed", 1 );
++	count[num]++;
++}
++
++static void
++print_rate( long num )
++{
++	struct timeval now;
++	long st_secs;
++	double last_secs;
++
++	gettimeofday( &now, NULL );
++	st_secs = now.tv_sec - start.tv_sec;
++	last_secs = ( double ) ( now.tv_sec - last[num].tv_sec )
++		+ ( ( double ) ( now.tv_usec - last[num].tv_usec ) ) / 1000000.0;
++	if ( last_secs <= 0.001 )
++		last_secs = 0.001;
++
++	if (!TESTS_QUIET) {
++		printf( "[%ld] time = %ld, count = %ld, iter = %ld, "
++			"rate = %.1f/Kiter\n",
++			num, st_secs, count[num], iter[num],
++			( 1000.0 * ( double ) count[num] ) / ( double ) iter[num] );
++	}
++
++	count[num] = 0;
++	iter[num] = 0;
++	last[num] = now;
++}
++
++static void
++do_cycles( long num, int len )
++{
++	struct timeval start, now;
++	double x, sum;
++
++	gettimeofday( &start, NULL );
++
++	for ( ;; ) {
++		sum = 1.0;
++		for ( x = 1.0; x < 250000.0; x += 1.0 )
++			sum += x;
++		if ( sum < 0.0 )
++			printf( "==>>  SUM IS NEGATIVE !!  <<==\n" );
++
++		iter[num]++;
++
++		gettimeofday( &now, NULL );
++		if ( now.tv_sec >= start.tv_sec + len )
++			break;
++	}
++}
++
++static void *
++my_thread( void *v )
++{
++	long num = ( long ) v;
++	int n;
++	int EventSet = PAPI_NULL;
++	int event_code;
++	long long value;
++
++	int retval;
++
++	retval = PAPI_register_thread(  );
++	if ( retval != PAPI_OK ) {
++		test_fail( __FILE__, __LINE__, "PAPI_register_thread", retval );
++	}
++	pthread_setspecific( key, v );
++
++	count[num] = 0;
++	iter[num] = 0;
++	last[num] = start;
++
++	retval = PAPI_create_eventset( &EventSet );
++	if ( retval != PAPI_OK ) {
++		test_fail( __FILE__, __LINE__, "PAPI_create_eventset failed", retval );
++	}
++
++	retval = PAPI_event_name_to_code("PAPI_TOT_CYC", &event_code);
++	if (retval != PAPI_OK ) {
++		if (!TESTS_QUIET) printf("Trouble creating event name\n");
++		test_fail( __FILE__, __LINE__, "PAPI_event_name_to_code failed", retval );
++	}
++
++	retval = PAPI_add_event( EventSet, EVENT );
++	if (retval != PAPI_OK ) {
++		if (!TESTS_QUIET) printf("Trouble adding event\n");
++		test_fail( __FILE__, __LINE__, "PAPI_add_event failed", retval );
++	}
++
++	if ( PAPI_overflow( EventSet, EVENT, threshold, 0, my_handler ) != PAPI_OK )
++		test_fail( __FILE__, __LINE__, "PAPI_overflow failed", 1 );
++
++	if ( PAPI_start( EventSet ) != PAPI_OK )
++		test_fail( __FILE__, __LINE__, "PAPI_start failed", 1 );
++
++	if (!TESTS_QUIET) printf( "launched timer in thread %ld\n", num );
++
++	for ( n = 1; n <= program_time; n++ ) {
++		do_cycles( num, 1 );
++		print_rate( num );
++	}
++
++	PAPI_stop( EventSet, &value );
++
++        retval = PAPI_overflow( EventSet, EVENT, 0, 0, my_handler);
++	if ( retval != PAPI_OK )
++            test_fail( __FILE__, __LINE__, "PAPI_overflow failed to reset the overflow handler", retval );
++
++	if ( PAPI_remove_event( EventSet, EVENT ) != PAPI_OK ) 
++	    test_fail( __FILE__, __LINE__, "PAPI_remove_event", 1 );
++
++	if ( PAPI_destroy_eventset( &EventSet ) != PAPI_OK ) 
++	    test_fail( __FILE__, __LINE__, "PAPI_destroy_eventset", 1 );
++
++	if ( PAPI_unregister_thread( ) != PAPI_OK ) 
++            test_fail( __FILE__, __LINE__, "PAPI_unregister_thread", 1 );
++
++	return ( NULL );
++}
++
++int
++main( int argc, char **argv )
++{
++	pthread_t *td = NULL;
++	long n;
++	int quiet,retval;
++
++	/* Set TESTS_QUIET variable */
++	quiet=tests_quiet( argc, argv );
++
++	if ( argc < 2 || sscanf( argv[1], "%d", &program_time ) < 1 )
++		program_time = 6;
++	if ( argc < 3 || sscanf( argv[2], "%d", &threshold ) < 1 )
++		threshold = 20000000;
++	if ( argc < 4 || sscanf( argv[3], "%d", &num_threads ) < 1 )
++		num_threads = 32;
++
++	td = malloc((num_threads+1) * sizeof(pthread_t));
++	if (!td) {
++		test_fail( __FILE__, __LINE__, "td malloc failed", 1 );
++	}
++
++	if (!quiet) {
++		printf( "program_time = %d, threshold = %d, num_threads = %d\n\n",
++			program_time, threshold, num_threads );
++	}
++
++	if ( PAPI_library_init( PAPI_VER_CURRENT ) != PAPI_VER_CURRENT )
++		test_fail( __FILE__, __LINE__, "PAPI_library_init failed", 1 );
++
++	/* Test to be sure we can add events */
++	retval = PAPI_query_event( EVENT );
++	if (retval!=PAPI_OK) {
++		if (!quiet) printf("Trouble finding event\n");
++		test_skip(__FILE__,__LINE__,"Event not available",1);
++	}
++
++	if ( PAPI_thread_init( ( unsigned long ( * )( void ) ) ( pthread_self ) ) !=
++		 PAPI_OK )
++		test_fail( __FILE__, __LINE__, "PAPI_thread_init failed", 1 );
++
++	if ( pthread_key_create( &key, NULL ) != 0 )
++		test_fail( __FILE__, __LINE__, "pthread key create failed", 1 );
++
++	gettimeofday( &start, NULL );
++
++	for ( n = 1; n <= num_threads; n++ ) {
++		if ( pthread_create( &(td[n]), NULL, my_thread, ( void * ) n ) != 0 )
++			test_fail( __FILE__, __LINE__, "pthread create failed", 1 );
++	}
++
++	my_thread( ( void * ) 0 );
++
++	/* wait for all the threads */
++	for ( n = 1; n <= num_threads; n++ ) {
++	  	if ( pthread_join( td[n], NULL))
++			test_fail( __FILE__, __LINE__, "pthread join failed", 1 );
++	}
++
++	free(td);
++
++	if (!quiet) printf( "done\n" );
++
++	test_pass( __FILE__ );
++
++	return 0;
++}
+commit 979e80136fd5e0ee2fb26f7374b36a8433147a68
+Author: Anthony Castaldo <TonyCastaldo@icl.utk.edu>
+Date:   Thu Oct 31 15:56:55 2019 -0400
+
+    The changes to papi.c, papi_internal.c, threads.h and threads.c
+    correct a race condition that was the result of all threads using
+    the same two static variables (papi_event_code and papi_event_code_changed)
+    to temporarily record a state of operation. The solution was to
+    make these variables unique per thread, using the ThreadInfo_t
+    structure already provided in PAPI for such purposes. The file
+    krentel_pthread_race.c is a stress test to produce race conditions.
+    filter_helgrind.c reduces the volume of --tool-helgrind output to
+    a more manageable summary. Both are added to Makefile.recipies.
+
+diff --git a/src/ctests/Makefile.recipies b/src/ctests/Makefile.recipies
+index 87340831d..b7c1963d7 100644
+--- a/src/ctests/Makefile.recipies
++++ b/src/ctests/Makefile.recipies
+@@ -161,6 +161,12 @@ locks_pthreads: locks_pthreads.c $(TESTLIB) $(PAPILIB)
+ krentel_pthreads: krentel_pthreads.c $(TESTLIB) $(PAPILIB)
+ 	$(CC_R) $(INCLUDE) $(CFLAGS) $(TOPTFLAGS) krentel_pthreads.c $(TESTLIB) $(PAPILIB) $(LDFLAGS) -o krentel_pthreads -lpthread
+ 
++# krentel_pthreads_race is not included with the standard tests;
++# it is a modification of krentel_pthreads intended to be run with 
++# "valgrind --tool=helgrind" to test for race conditions.
++krentel_pthreads_race: krentel_pthreads_race.c $(TESTLIB) $(PAPILIB)
++	$(CC_R) $(INCLUDE) $(CFLAGS) $(TOPTFLAGS) krentel_pthreads_race.c $(TESTLIB) $(PAPILIB) $(LDFLAGS) -o krentel_pthreads_race -lpthread
++
+ overflow_pthreads: overflow_pthreads.c $(TESTLIB) $(DOLOOPS) $(PAPILIB)
+ 	$(CC_R) $(INCLUDE) $(CFLAGS) $(TOPTFLAGS) overflow_pthreads.c $(TESTLIB) $(DOLOOPS) $(PAPILIB) $(LDFLAGS) -o overflow_pthreads -lpthread
+ 
+@@ -434,6 +440,9 @@ forkexec4: forkexec4.c $(TESTLIB) $(PAPILIB)
+ prof_utils.o: prof_utils.c $(testlibdir)/papi_test.h prof_utils.h
+ 	$(CC) $(INCLUDE) $(CFLAGS) $(TOPTFLAGS) -c prof_utils.c
+ 
++filter_helgrind: filter_helgrind.c $(TESTLIB) $(PAPILIB)
++	-$(CC) $(INCLUDE) $(CFLAGS) $(TOPTFLAGS) filter_helgrind.c $(TESTLIB) $(PAPILIB) $(LDFLAGS) -o filter_helgrind 
++
+ .PHONY : all default ctests ctest clean
+ 
+ clean:
+diff --git a/src/ctests/filter_helgrind.c b/src/ctests/filter_helgrind.c
+new file mode 100644
+index 000000000..d918a789e
+--- /dev/null
++++ b/src/ctests/filter_helgrind.c
+@@ -0,0 +1,170 @@
++/*
++ *  This code is a simple filter for the helgrind_out.txt file
++ *  produced by:
++ *  "valgrind --tool=helgrind --log-file=helgrind_out.txt someProgram"
++ *
++ * This is useful because the tool does not recognize PAPI locks,
++ * thus reports as possible race conditions reads/writes by
++ * different threads that are actually fine (surrounded by locks).
++ *
++ * This was written particularly for krentel_pthreads_race.c 
++ * when processed by the above valgrind. We produce a line per
++ * condition, in the form:
++ * OP@file:line OP@file:line
++ * where OP is R or W. The first file:line code occurred
++ * after the second file:line code, and on a different thread.
++ * 
++ * We print the results to stdout. It is useful to filter this
++ * through the standard utility 'uniq', each occurrence only 
++ * needs to be investigated once. Just insure there are
++ * MATCHING locks around each operation within the code.
++ *
++ * An example run (using uniq): The options -uc will print 
++ * only unique lines, preceeded by a count of how many times
++ * it occurs.
++ *
++ * ./filter_helgrind | uniq -uc
++ *
++ * An example output line (piped through uniq as above):
++ *       1 R@threads.c:190                    W@threads.c:206
++ * An investigation shows threads.c:190 is protected by 
++ * _papi_hwi_lock(THREADS_LOCK); and threads.c:206 is
++ * protected by the same lock. Thus no data race can 
++ * occur for this instance.
++ *
++ * Compilation within the papi/src/ctests directory:
++ * make filter_helgrind
++ * 
++ */
++
++#include <stdio.h>
++#include <stdlib.h>
++#include <string.h>
++
++int main(int argc, char** args) {
++   (void) argc;
++   (void) args;
++
++   char myLine[16384];
++   int state, size;
++   char type1, type2;
++   char fname1[256], fname2[256];
++   char *paren1, *paren2;
++
++   FILE *HELOUT = fopen("helgrind_out.txt", "r");  // Read the file.
++   if (HELOUT == NULL) {
++      fprintf(stderr, "Could not open helgrind_out.txt.\n");
++      exit(-1);
++   }
++
++   char PDRR[]="Possible data race during read";
++   char PDRW[]="Possible data race during write";
++   char TCWW[]="This conflicts with a previous write";
++   char TCWR[]="This conflicts with a previous read";
++   char atSTR[]="   at ";
++
++   // State machine:
++   // State 0: We are looking for a line with PDRR or PDRW.
++   //          We don't exit until we find it, or run out of lines.
++   //          if we find it, we remember which and go to state 1.
++   // State 1: Looking for "   at " in column 11. 
++   //          When found, we extract the string betweeen '(' and ')'
++   //          which is program name:line. go to state 2.
++   // State 2: We are searching for TCWW, TCWR, PDRW, PDRR.
++   //          If we find the first two:
++   //             Remember which, and go to state 3.
++   //          If we find either of the second two, go back to State 1.
++   // State 3: Looking for "   at " in column 11.
++   //          When found, extract the string betweeen '(' and ')',
++   //          which is program name:line.
++   //          OUTPUT LINE for an investigation.
++   //          Go to State 0.
++
++   state = 0;        // looking for PDRR, PDRW. 
++   while (fgets(myLine, 16384, HELOUT) != NULL) {
++      if (strlen(myLine) < 20) continue;
++      switch (state) {
++         case 0:  // Looking for PDRR or PRDW.
++            if (strstr(myLine, PDRR) != NULL) { 
++               type1='R';
++               state=1;
++               continue;
++            }
++
++            if (strstr(myLine, PDRW) != NULL) {
++               type1='W';
++               state=1;
++               continue;
++            }
++      
++            continue;
++            break;
++
++         case 1: // Looking for atSTR in column 11.
++            if (strncmp(myLine+10, atSTR, 6) != 0) continue;
++            paren1=strchr(myLine, '(');
++            paren2=strchr(myLine, ')');
++            if (paren1 == NULL || paren2 == NULL ||
++                paren1 > paren2) {
++               state=0;             // Abort, found something I don't understand.
++               continue;
++            }
++
++            size = paren2-paren1-1;          // compute length of name.
++            strncpy(fname1, paren1+1, size); // Copy the name.
++            fname1[size]=0;                  // install z-terminator.
++            state=2;
++            continue;
++            break;
++
++         case 2: // Looking for TCWW, TCWR, PDRR, PDRW.
++            if (strstr(myLine, TCWR) != NULL) {
++               type2='R';
++               state=3;
++               continue;
++            }
++
++            if (strstr(myLine, TCWW) != NULL) { 
++               type2='W';
++               state=3;
++               continue;
++            }
++
++            if (strstr(myLine, PDRR) != NULL) { 
++               type1='R';
++               state=1;
++               continue;
++            }
++
++            if (strstr(myLine, PDRW) != NULL) {
++               type1='W';
++               state=1;
++               continue;
++            }
++
++            continue;
++            break;
++
++         case 3: // Looking for atSTR in column 11.
++            if (strncmp(myLine+10, atSTR, 6) != 0) continue;
++            paren1=strchr(myLine, '(');
++            paren2=strchr(myLine, ')');
++            if (paren1 == NULL || paren2 == NULL ||
++                paren1 > paren2) {
++               state=0;             // Abort, found something I don't understand.
++               continue;
++            }
++
++            size = paren2-paren1-1;          // compute length of name.
++            strncpy(fname2, paren1+1, size); // Copy the name.
++            fname2[size]=0;                  // install z-terminator.
++            fprintf(stdout, "%c@%-32s %c@%-32s\n", type1, fname1, type2, fname2);
++            state=0;
++            continue;
++            break;
++      } // end switch.
++   } // end while.
++   
++   fclose(HELOUT);
++   exit(0);
++}  
+diff --git a/src/papi.c b/src/papi.c
+index 4e08dc840..070e3f8c6 100644
+--- a/src/papi.c
++++ b/src/papi.c
+@@ -608,32 +608,26 @@ PAPI_library_init( int version )
+ 	   papi_return( init_retval );
+ 	}
+ 
+-	/* Initialize component globals */
++	/* Initialize thread globals, including the main threads  */
+ 
+-	tmp = _papi_hwi_init_global(  );
++	tmp = _papi_hwi_init_global_threads(  );
+ 	if ( tmp ) {
+ 		init_retval = tmp;
+ 		_papi_hwi_shutdown_global_internal(  );
+-		_in_papi_library_init_cnt--;
++   	_in_papi_library_init_cnt--;
+ 		papi_return( init_retval );
+ 	}
+-	
+-	/* Initialize thread globals, including the main threads  */
+ 
+-	tmp = _papi_hwi_init_global_threads(  );
++	/* Initialize component globals */
++
++	tmp = _papi_hwi_init_global(  );
+ 	if ( tmp ) {
+-		int i;
+ 		init_retval = tmp;
+ 		_papi_hwi_shutdown_global_internal(  );
+-		for ( i = 0; i < papi_num_components; i++ ) {
+-		    if (!_papi_hwd[i]->cmp_info.disabled) {
+-                       _papi_hwd[i]->shutdown_component(  );
+-		    }
+-		}
+ 		_in_papi_library_init_cnt--;
+ 		papi_return( init_retval );
+ 	}
+-
++	
+ 	init_level = PAPI_LOW_LEVEL_INITED;
+ 	_in_papi_library_init_cnt--;
+ 
+diff --git a/src/papi_internal.c b/src/papi_internal.c
+index 2412eca63..f0e457bf7 100644
+--- a/src/papi_internal.c
++++ b/src/papi_internal.c
+@@ -111,31 +111,28 @@ _papi_hwi_free_papi_event_string() {
+ 	}
+ 	return;
+ }
+-// A place to keep the current papi event code so some component functions can fetch its value
+-// The current event code can be stored here prior to component calls and cleared after the component returns
+-static unsigned int papi_event_code = -1;
+-static int papi_event_code_changed = -1;
++
+ void
+ _papi_hwi_set_papi_event_code (unsigned int event_code, int update_flag) {
+ 	INTDBG("new event_code: %#x, update_flag: %d, previous event_code: %#x\n", event_code, update_flag, papi_event_code);
+ 
+ 	// if call is just to reset and start over, set both flags to show nothing saved yet
+ 	if (update_flag < 0) {
+-		papi_event_code_changed = -1;
+-		papi_event_code = -1;
++		_papi_hwi_my_thread->tls_papi_event_code_changed = -1;
++		_papi_hwi_my_thread->tls_papi_event_code = -1;
+ 		return;
+ 	}
+ 
+ 	// if 0, it is being set prior to calling a component, if >0 it is being changed by the component
+-	papi_event_code_changed = update_flag;
++	_papi_hwi_my_thread->tls_papi_event_code_changed = update_flag;
+ 	// save the event code passed in
+-	papi_event_code = event_code;
++	_papi_hwi_my_thread->tls_papi_event_code = event_code;
+ 	return;
+ }
+ unsigned int
+ _papi_hwi_get_papi_event_code () {
+ 	INTDBG("papi_event_code: %#x\n", papi_event_code);
+-	return papi_event_code;
++	return _papi_hwi_my_thread->tls_papi_event_code;
+ }
+ /* Get the index into the ESI->NativeInfoArray for the current PAPI event code */
+ int
+@@ -560,7 +557,7 @@ _papi_hwi_native_to_eventcode(int cidx, int event_code, int ntv_idx, const char
+ 
+   int result;
+ 
+-  if (papi_event_code_changed > 0) {
++  if (_papi_hwi_my_thread->tls_papi_event_code_changed > 0) {
+ 	  result = _papi_hwi_get_papi_event_code();
+ 	  INTDBG("EXIT: papi_event_code: %#x set by the component\n", result);
+ 	  return result;
+diff --git a/src/threads.c b/src/threads.c
+index 4dd0cf4e3..9f586c415 100644
+--- a/src/threads.c
++++ b/src/threads.c
+@@ -286,6 +286,10 @@ _papi_hwi_initialize_thread( ThreadInfo_t ** dest, int tid )
+ 		return PAPI_ENOMEM;
+ 	}
+ 
++   /* init event memory variables, used by papi_internal.c  */
++   thread->tls_papi_event_code = -1;
++   thread->tls_papi_event_code_changed = -1;
++
+ 	/* Call the component to fill in anything special. */
+ 
+ 	for ( i = 0; i < papi_num_components; i++ ) {
+@@ -421,6 +425,11 @@ _papi_hwi_shutdown_thread( ThreadInfo_t * thread, int force_shutdown )
+ 	unsigned long tid;
+ 	int i, failure = 0;
+ 
++   /* Clear event memory variables */
++   thread->tls_papi_event_code = -1;
++   thread->tls_papi_event_code_changed = -1;
++
++   /* Get thread id */
+ 	if ( _papi_hwi_thread_id_fn )
+ 		tid = ( *_papi_hwi_thread_id_fn ) (  );
+ 	else
+diff --git a/src/threads.h b/src/threads.h
+index cd3369068..264d9f3a6 100644
+--- a/src/threads.h
++++ b/src/threads.h
+@@ -30,6 +30,11 @@ typedef struct _ThreadInfo
+ 	EventSetInfo_t **running_eventset;
+ 	EventSetInfo_t *from_esi;          /* ESI used for last update this control state */
+ 	int wants_signal;
++
++   // The current event code can be stored here prior to 
++   // component calls and cleared after the component returns.
++   unsigned int tls_papi_event_code;
++   int tls_papi_event_code_changed;
+ } ThreadInfo_t;
+ 
+ /** The list of threads, gets initialized to master process with TID of getpid() 

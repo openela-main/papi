@@ -1,0 +1,140 @@
+commit 2098e8656156084104ab8d1981b53c50d22b8f62
+Author: Masahiko, Yamada <yamada.masahiko@fujitsu.com>
+Date:   Fri Mar 4 13:34:20 2022 +0900
+
+    PAPI_get_hardware_info: improve PAPI_hw_info_t for ARM processors
+    
+    Currently, it is not possible to determine which company the ARM processor
+    was designed by from the PAPI_hw_info_t available in PAPI_get_hardware_info().
+    On ARM processors, the PAPI_hw_info_t obtained with PAPI_get_hardware_info()
+    does not contain information indicating which company was designed.
+    For ARM processors, improve the vendor and vendor_string entries
+    in PAPI_hw_info_t, which can be retrieved with PAPI_get_hardware_info(),
+    to include information indicating which company was designed.
+    
+    Signed-off-by: Masahiko, Yamada <yamada.masahiko@fujitsu.com>
+
+diff --git a/src/components/perf_event/pe_libpfm4_events.c b/src/components/perf_event/pe_libpfm4_events.c
+index 744851ff0..6dcb5e023 100644
+--- a/src/components/perf_event/pe_libpfm4_events.c
++++ b/src/components/perf_event/pe_libpfm4_events.c
+@@ -1248,8 +1248,10 @@ _pe_libpfm4_init(papi_vector_t *component, int cidx,
+ 						    &pinfo,sizeof(pfm_pmu_info_t));
+                         found_default++;
+ 				}
++
++				/* For ARM processors, */
+ 				if ( (pinfo.type==PFM_PMU_TYPE_CORE) &&
+-					( _papi_hwi_system_info.hw_info.vendor == PAPI_VENDOR_ARM)) {
++					( _papi_hwi_system_info.hw_info.vendor >= PAPI_VENDOR_ARM_ARM)) {
+ 					if (strlen(_papi_hwi_system_info.hw_info.model_string) == 0) {
+ 						strSize = sizeof(_papi_hwi_system_info.hw_info.model_string);
+ 						strncpy( _papi_hwi_system_info.hw_info.model_string, pinfo.desc, strSize - 1);
+diff --git a/src/components/perf_event/perf_event.c b/src/components/perf_event/perf_event.c
+index a50194cf6..6985fc4cb 100644
+--- a/src/components/perf_event/perf_event.c
++++ b/src/components/perf_event/perf_event.c
+@@ -137,7 +137,8 @@ pe_vendor_fixups(papi_vector_t *vector)
+   }
+ 
+ 	/* ARM */
+-	if ( _papi_hwi_system_info.hw_info.vendor == PAPI_VENDOR_ARM) {
++	/* If implementer is ARM Limited. */
++	if ( _papi_hwi_system_info.hw_info.vendor == PAPI_VENDOR_ARM_ARM) {
+ 
+ 		/* Some ARMv7 and earlier could not measure	*/
+ 		/* KERNEL and USER separately.			*/
+diff --git a/src/linux-common.c b/src/linux-common.c
+index 99601db86..2527981ad 100644
+--- a/src/linux-common.c
++++ b/src/linux-common.c
+@@ -112,8 +112,20 @@ decode_vendor_string( char *s, int *vendor )
+ 		*vendor = PAPI_VENDOR_IBM;
+ 	else if ( strcasecmp( s, "Cray" ) == 0 )
+ 		*vendor = PAPI_VENDOR_CRAY;
+-	else if ( strcasecmp( s, "ARM" ) == 0 )
+-		*vendor = PAPI_VENDOR_ARM;
++	else if ( strcasecmp( s, "ARM_ARM" ) == 0 )
++		*vendor = PAPI_VENDOR_ARM_ARM;
++	else if ( strcasecmp( s, "ARM_BROADCOM" ) == 0 )
++		*vendor = PAPI_VENDOR_ARM_BROADCOM;
++	else if ( strcasecmp( s, "ARM_CAVIUM" ) == 0 )
++		*vendor = PAPI_VENDOR_ARM_CAVIUM;
++	else if ( strcasecmp( s, "ARM_FUJITSU" ) == 0 )
++		*vendor = PAPI_VENDOR_ARM_FUJITSU;
++	else if ( strcasecmp( s, "ARM_HISILICON") == 0 )
++		*vendor = PAPI_VENDOR_ARM_HISILICON;
++	else if ( strcasecmp( s, "ARM_APM" ) == 0 )
++		*vendor = PAPI_VENDOR_ARM_APM;
++	else if ( strcasecmp( s, "ARM_QUALCOMM" ) == 0 )
++		*vendor = PAPI_VENDOR_ARM_QUALCOMM;
+ 	else if ( strcasecmp( s, "MIPS" ) == 0 )
+ 		*vendor = PAPI_VENDOR_MIPS;
+ 	else if ( strcasecmp( s, "SiCortex" ) == 0 )
+@@ -409,9 +421,38 @@ _linux_get_cpu_info( PAPI_hw_info_t *hwinfo, int *cpuinfo_mhz )
+ 				}
+ 				else {
+ 					/* "CPU implementer" indicates ARM */
++					/* For ARM processors, hwinfo->vendor >= PAPI_VENDOR_ARM_ARM(0x41). */
++					/* If implementer is ARM Limited., hwinfo->vendor == PAPI_VENDOR_ARM_ARM. */
++					/* If implementer is Cavium Inc., hwinfo->vendor == PAPI_VENDOR_ARM_CAVIUM(0x43). */
+ 					s = search_cpu_info( f, "CPU implementer");
+ 					if ( s ) {
+-						strcpy( hwinfo->vendor_string, "ARM" );
++						int tmp;
++						sscanf( s, "%x", &tmp );
++						switch( tmp ) {
++						case PAPI_VENDOR_ARM_ARM:
++							strcpy( hwinfo->vendor_string, "ARM_ARM" );
++							break;
++						case PAPI_VENDOR_ARM_BROADCOM:
++							strcpy( hwinfo->vendor_string, "ARM_BROADCOM" );
++							break;
++						case PAPI_VENDOR_ARM_CAVIUM:
++							strcpy( hwinfo->vendor_string, "ARM_CAVIUM" );
++							break;
++						case PAPI_VENDOR_ARM_FUJITSU:
++							strcpy( hwinfo->vendor_string, "ARM_FUJITSU" );
++							break;
++						case PAPI_VENDOR_ARM_HISILICON:
++							strcpy( hwinfo->vendor_string, "ARM_HISILICON" );
++							break;
++						case PAPI_VENDOR_ARM_APM:
++							strcpy( hwinfo->vendor_string, "ARM_APM" );
++							break;
++						case PAPI_VENDOR_ARM_QUALCOMM:
++							strcpy( hwinfo->vendor_string, "ARM_QUALCOMM" );
++							break;
++						default:
++							strcpy( hwinfo->vendor_string, "ARM_UNKNOWN" );
++						}
+ 					}
+ 				}
+ 			}
+@@ -438,7 +479,7 @@ _linux_get_cpu_info( PAPI_hw_info_t *hwinfo, int *cpuinfo_mhz )
+ 		decode_cpuinfo_power(f,hwinfo);
+ 	}
+ 
+-	if (hwinfo->vendor==PAPI_VENDOR_ARM) {
++	if (hwinfo->vendor>=PAPI_VENDOR_ARM_ARM) {
+ 
+ 		decode_cpuinfo_arm(f,hwinfo);
+ 	}
+diff --git a/src/papi.h b/src/papi.h
+index 14b05da1f..b05b368cb 100644
+--- a/src/papi.h
++++ b/src/papi.h
+@@ -354,6 +354,13 @@ All of the functions in the PerfAPI should use the following set of constants.
+ #define PAPI_VENDOR_FREESCALE 6
+ #define PAPI_VENDOR_ARM     7
+ #define PAPI_VENDOR_MIPS    8
++#define PAPI_VENDOR_ARM_ARM       0x41
++#define PAPI_VENDOR_ARM_BROADCOM  0x42
++#define PAPI_VENDOR_ARM_CAVIUM    0x43
++#define PAPI_VENDOR_ARM_FUJITSU   0x46
++#define PAPI_VENDOR_ARM_HISILICON 0x48
++#define PAPI_VENDOR_ARM_APM       0x50
++#define PAPI_VENDOR_ARM_QUALCOMM  0x51
+ /** @} */
+ 
+ /** @internal 
