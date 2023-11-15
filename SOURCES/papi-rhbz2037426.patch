@@ -1,0 +1,42 @@
+commit b78d7665bc02a0ce17adc6c09ab052064a940937
+Author: Masahiko, Yamada <yamada.masahiko@fujitsu.com>
+Date:   Wed Dec 8 19:39:44 2021 +0900
+
+    Improve the papi_xml_event_info command.
+    
+    Modify the papi_xml_event_info command as follows:.
+    - Test only the event name even if the event has a unit mask.
+    - Test other unit masks in the event even if
+      there is an error in one unit mask in the event.
+    
+    Signed-off-by: Masahiko, Yamada <yamada.masahiko@fujitsu.com>
+
+diff --git a/src/utils/papi_xml_event_info.c b/src/utils/papi_xml_event_info.c
+index 2a777a9fe..c024cc036 100644
+--- a/src/utils/papi_xml_event_info.c
++++ b/src/utils/papi_xml_event_info.c
+@@ -226,9 +226,6 @@ enum_native_events( FILE * f, int cidx)
+ 	   k = i;
+ 	   if ( PAPI_enum_cmp_event( &k, PAPI_NTV_ENUM_UMASKS, cidx ) == PAPI_OK ) {
+ 
+-	      /* Test if event can be added */
+-	      if ( test_event( k ) == PAPI_OK ) {
+-
+ 		 /* add the event */
+ 		 xmlize_event( f, &info, num );
+ 
+@@ -237,13 +234,12 @@ enum_native_events( FILE * f, int cidx)
+ 		    retval = PAPI_get_event_info( k, &info );
+ 		    if ( retval == PAPI_OK ) {
+ 		       if ( test_event( k )!=PAPI_OK ) {
+-			   break;
++			   continue;
+ 		       }
+ 		       xmlize_event( f, &info, -1 );
+ 		    }
+ 		 } while ( PAPI_enum_cmp_event( &k, PAPI_NTV_ENUM_UMASKS, cidx ) == PAPI_OK);
+ 		 fprintf( f, "    </event>\n" );
+-	      }
+ 	   } else {
+               /* this event has no unit masks; test & write the event */
+ 	      if ( test_event( i ) == PAPI_OK ) {

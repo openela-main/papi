@@ -1,0 +1,83 @@
+commit 6de699f68e6e2bffb44a1b943aca52d7d838d4d4
+Author: Vince Weaver <vincent.weaver@maine.edu>
+Date:   Thu Jan 10 14:54:42 2019 -0500
+
+    perf_event: internally indicate we need fallback when rdpmc not available
+
+diff --git a/src/components/perf_event/perf_helpers.h b/src/components/perf_event/perf_helpers.h
+index 20dfbacd1..7f0ff6c95 100644
+--- a/src/components/perf_event/perf_helpers.h
++++ b/src/components/perf_event/perf_helpers.h
+@@ -138,6 +138,10 @@ static inline unsigned long long mmap_read_self(void *addr,
+ 
+ 			/* Only adjust if index is valid */
+ 			running+=delta;
++		} else {
++			/* Falling back because rdpmc not supported	*/
++			/* for this event.				*/
++			return 0xffffffffffffffffULL;
+ 		}
+ 
+ 		barrier();
+commit a76b1580f035726b28b0e37afc75de760ceaf1e4
+Author: Vince Weaver <vincent.weaver@maine.edu>
+Date:   Thu Jan 10 15:36:03 2019 -0500
+
+    perf_event: properly fall back to read() if rdpmc read attempt fails
+    
+    The code wasn't properly handling this.
+    
+    We now fall back to read() if *any* rdpmc call in an eventset fails.
+    In theory it is possible to only fall back in a per-event fashion but
+    that would make the code a lot more complex.
+
+diff --git a/src/components/perf_event/perf_event.c b/src/components/perf_event/perf_event.c
+index a3bd0b800..1f4bbcee7 100644
+--- a/src/components/perf_event/perf_event.c
++++ b/src/components/perf_event/perf_event.c
+@@ -1094,6 +1094,7 @@ _pe_rdpmc_read( hwd_context_t *ctx, hwd_control_state_t *ctl,
+ 	int i;
+ 	pe_control_t *pe_ctl = ( pe_control_t *) ctl;
+ 	unsigned long long count, enabled, running, adjusted;
++	int errors=0;
+ 
+ 	/* we must read each counter individually */
+ 	for ( i = 0; i < pe_ctl->num_events; i++ ) {
+@@ -1101,7 +1102,9 @@ _pe_rdpmc_read( hwd_context_t *ctx, hwd_control_state_t *ctl,
+ 		count = mmap_read_self(pe_ctl->events[i].mmap_buf,
+ 						&enabled,&running);
+ 
+-		/* TODO: more error checking? */
++		if (count==0xffffffffffffffffULL) {
++			errors++;
++		}
+ 
+ 		/* Handle multiplexing case */
+ 		if (enabled == running) {
+@@ -1127,6 +1130,8 @@ _pe_rdpmc_read( hwd_context_t *ctx, hwd_control_state_t *ctl,
+ 
+ 	SUBDBG("EXIT: *events: %p\n", *events);
+ 
++	if (errors) return PAPI_ESYS;
++
+ 	return PAPI_OK;
+ }
+ 
+@@ -1253,10 +1258,16 @@ _pe_read( hwd_context_t *ctx, hwd_control_state_t *ctl,
+ 	int i, j, ret = -1;
+ 	pe_control_t *pe_ctl = ( pe_control_t *) ctl;
+ 	long long papi_pe_buffer[READ_BUFFER_SIZE];
++	int result;
+ 
+ 	/* Handle fast case */
++	/* FIXME: we fallback to slow reads if *any* event in eventset fails */
++	/*        in theory we could only fall back for the one event        */
++	/*        but that makes the code more complicated.                  */
+ 	if ((_perf_event_vector.cmp_info.fast_counter_read) && (!pe_ctl->inherit)) {
+-		return _pe_rdpmc_read( ctx, ctl, events, flags);
++		result=_pe_rdpmc_read( ctx, ctl, events, flags);
++		/* if successful we are done, otherwise fall back to read */
++		if (result==PAPI_OK) return PAPI_OK;
+ 	}
+ 
+ 	/* Handle case where we are multiplexing */
