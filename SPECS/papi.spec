@@ -11,7 +11,7 @@
 Summary: Performance Application Programming Interface
 Name: papi
 Version: 6.0.0
-Release: 12%{?dist}
+Release: 15%{?dist}
 License: BSD
 Requires: papi-libs = %{version}-%{release}
 URL: http://icl.cs.utk.edu/papi/
@@ -22,11 +22,13 @@ URL: http://icl.cs.utk.edu/papi/
 # so when papi is rebased to a newer version it can be used as is.
 Source0: http://icl.cs.utk.edu/projects/papi/downloads/%{name}-%{version}-noiozone.tar.gz
 Patch1: papi-python3.patch
-Patch2: papi-a64fx.patch
 Patch4: papi-config.patch
 Patch5: papi-nostatic.patch
 Patch6: papi-lto.patch
 Patch7: papi-rhbz1923967.patch
+Patch21: papi-arm64fastread.patch
+Patch31: papi-701eventupdate.patch
+Patch40: papi-thread_init.patch
 BuildRequires: make
 BuildRequires: autoconf
 BuildRequires: doxygen
@@ -36,9 +38,9 @@ BuildRequires: kernel-headers >= 2.6.32
 BuildRequires: chrpath
 BuildRequires: lm_sensors-devel
 %if %{without bundled_libpfm}
-BuildRequires: libpfm-devel >= 4.6.0-1
+BuildRequires: libpfm-devel >= 4.13.0-1
 %if %{with_static}
-BuildRequires: libpfm-static >= 4.6.0-1
+BuildRequires: libpfm-static >= 4.13.0-1
 %endif
 %endif
 # Following required for net component
@@ -95,11 +97,13 @@ the PAPI user-space libraries and interfaces.
 %prep
 %setup -q
 %patch1 -p1 -b .python3
-%patch2 -p1 -b .a64fx
 %patch4 -p1
 %patch5 -p1
 %patch6 -p1
 %patch7 -p1
+%patch21 -p1
+%patch31 -p1
+%patch40 -p1
 
 %build
 
@@ -192,6 +196,15 @@ chrpath --delete $RPM_BUILD_ROOT%{_libdir}/*.so*
 %endif
 
 %changelog
+* Fri Jun 16 2023 William Cohen <wcohen@redhat.com> - 6.0.0-15
+- Address thread initialization order. (RHBZ#2215582)
+
+* Thu May 4 2023 William Cohen <wcohen@redhat.com> - 6.0.0-14
+- Update papi event presets (RHBZ#2111923, RHBZ#2111942, RHBZ#2111947)
+
+* Thu Apr 27 2023 William Cohen <wcohen@redhat.com> - 6.0.0-13
+- Improve aarch64 read speed. (rhbz2186927)
+
 * Thu May 26 2022 William Cohen <wcohen@redhat.com> - 6.0.0-12
 - Disable problematic IBM Power9 events. (RHBZ#1923967)
 
