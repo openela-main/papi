@@ -1,0 +1,382 @@
+commit 77ee6b54f4080ca27b7efcb4c91679d0f1e090b5
+Author: Anthony Castaldo <TonyCastaldo@icl.utk.edu>
+Date:   Fri Jan 24 10:25:36 2020 -0500
+
+    New libpfm4 contains "aliased" pmus for backward compatibility,
+    amd64_fam17h == amd64_fam17h_zen1; this causes us to put BOTH pmus
+    into the PMUs supported string and double the events in native_avail.
+    This update recognizes when aliases exist (the names must be hard-coded)
+    and uses only one of the most recent name.
+
+diff --git a/src/components/perf_event/pe_libpfm4_events.c b/src/components/perf_event/pe_libpfm4_events.c
+index 3b5f8d13f..3262608cd 100644
+--- a/src/components/perf_event/pe_libpfm4_events.c
++++ b/src/components/perf_event/pe_libpfm4_events.c
+@@ -31,6 +31,9 @@
+ // used to step through the attributes when enumerating events
+ static int attr_idx;
+ 
++/* alias flags to handle amd_fam17h, amd_fam17h_zen1 both present PMUs*/
++static int amd64_fam17h_zen1_present = 0;
++
+ /** @class  find_existing_event
+  *  @brief  looks up an event, returns it if it exists
+  *
+@@ -482,7 +485,13 @@ static struct native_event_t *allocate_native_event(
+  *
+  *  @returns returns a libpfm event number
+  *  @retval PAPI_ENOEVENT  Could not find an event
+- *
++ *  Operational note: _pe_libpfm4_init() must be called first to set
++ *                    flags for synonymous PMUs. At this writing only 
++ *                    amd64_fam17h_zen1_present is defined.
++ *  Operational note: We indirectly return the pmu_idx within the
++ *                    event data; the calling code uses that to set
++ *                    pmu_idx for subsequent calls. All we do is find
++ *                    the next valid pmu, if any.
+  */
+ 
+ static int
+@@ -511,6 +520,12 @@ get_first_event_next_pmu(int pmu_idx, int pmu_type)
+ 		break;
+ 	}
+ 
++    if ((ret==PFM_SUCCESS) && amd64_fam17h_zen1_present && strcmp(pinfo.name, "amd64_fam17h") == 0) {
++        /* Skip as if invalid; we want the PMU amd64_fam17h_zen1 instead. */
++        pmu_idx++;
++        continue;
++    }
++        
+     if ((ret==PFM_SUCCESS) && pmu_is_present_and_right_type(&pinfo,pmu_type)) {
+ 
+       pidx=pinfo.first_event;
+@@ -1159,6 +1174,35 @@ _pe_libpfm4_init(papi_vector_t *component, int cidx,
+ 	event_table->default_pmu.size = sizeof(pfm_pmu_info_t);
+ 	retval=pfm_get_pmu_info(0, &(event_table->default_pmu));
+ 
++    SUBDBG("Prescan for aliases.")
++    /* We have to see if we have aliases in there as separate PMUs, */
++    /* we don't want both PMUs with all the events duplicated.      */
++    /* For aliases, either is valid alone, but if both are present  */
++    /* specify a preference in the code.                            */
++    /* Alias: amd64_fam17h_zen1 over amd64_fam17h.                  */
++    /* Alias flags are static ints global to this file.             */
++    i=0;
++	while(1) {
++		memset(&pinfo,0,sizeof(pfm_pmu_info_t));
++		pinfo.size = sizeof(pfm_pmu_info_t);
++		retval=pfm_get_pmu_info(i, &pinfo);
++
++		/* We're done if we hit an invalid PMU entry		    */
++		/* We can't check against PFM_PMU_MAX as that might not	*/
++		/* match if libpfm4 is dynamically linked		        */
++
++		if (retval==PFM_ERR_INVAL) {
++			break;
++		}
++
++		if ( (retval==PFM_SUCCESS) && (pinfo.name != NULL) &&
++			(pmu_is_present_and_right_type(&pinfo,pmu_type)) &&
++            (strcmp(pinfo.name,"amd64_fam17h_zen1") == 0) ) {
++            amd64_fam17h_zen1_present = 1;
++        }
++        i++;
++    } 
++
+ 	SUBDBG("Detected pmus:\n");
+ 	i=0;
+ 	while(1) {
+@@ -1177,6 +1221,12 @@ _pe_libpfm4_init(papi_vector_t *component, int cidx,
+ 		if ((retval==PFM_SUCCESS) && (pinfo.name != NULL) &&
+ 			(pmu_is_present_and_right_type(&pinfo,pmu_type))) {
+ 
++            /* skip if it is amd64_fam17h and zen1 is also present. */
++            if (strcmp(pinfo.name,"amd64_fam17h") == 0 && amd64_fam17h_zen1_present) {
++                i++;
++                continue;
++            }
++
+ 			SUBDBG("\t%d %s %s %d\n",i,
+ 				pinfo.name,pinfo.desc,pinfo.type);
+ 
+@@ -1193,11 +1243,9 @@ _pe_libpfm4_init(papi_vector_t *component, int cidx,
+ 				/* Hack to have "default core" PMU */
+ 				if ( (pinfo.type==PFM_PMU_TYPE_CORE) &&
+ 					strcmp(pinfo.name,"ix86arch")) {
+-
+-					SUBDBG("\t  %s is default\n",pinfo.name);
+-					memcpy(&(event_table->default_pmu),
+-						&pinfo,sizeof(pfm_pmu_info_t));
+-					found_default++;
++					    memcpy(&(event_table->default_pmu),
++						    &pinfo,sizeof(pfm_pmu_info_t));
++                        found_default++;
+ 				}
+ 			}
+ 
+commit 79fe2a025afb8acb317032030c8847c9cbfd0162
+Author: Masahiko, Yamada <yamada.masahiko@fujitsu.com>
+Date:   Tue Jan 5 13:45:34 2021 +0900
+
+    Get model_string for ARM processor from pfm_get_pmu_info() function
+    
+    On ARM processors, the model_string does not appear in /proc/cpuinfo.
+    Instead of looking at the /proc/cpuinfo information, you can look at the lscpu command information at the following URL:.
+    https://github.com/google/cpu_features/issues/26
+    http://suihkulokki.blogspot.com/2018/02/making-sense-of-proccpuinfo-on-arm.html
+    
+    The libpfm4 library identifies the ARM processor type from the "CPU implement" and "CPU part" in the /proc/cpuinfo information.
+    The papi library can use the pfm_get_pmu_info() function from the libpfm4 library to obtain a string identifying the ARM processor type.
+
+diff --git a/src/components/perf_event/pe_libpfm4_events.c b/src/components/perf_event/pe_libpfm4_events.c
+index a84819cc0..744851ff0 100644
+--- a/src/components/perf_event/pe_libpfm4_events.c
++++ b/src/components/perf_event/pe_libpfm4_events.c
+@@ -1149,6 +1149,7 @@ _pe_libpfm4_init(papi_vector_t *component, int cidx,
+ 
+ 	pfm_err_t retval = PFM_SUCCESS;
+ 	pfm_pmu_info_t pinfo;
++	unsigned int strSize;
+ 
+ 	/* allocate the native event structure */
+ 	event_table->num_native_events=0;
+@@ -1247,6 +1248,13 @@ _pe_libpfm4_init(papi_vector_t *component, int cidx,
+ 						    &pinfo,sizeof(pfm_pmu_info_t));
+                         found_default++;
+ 				}
++				if ( (pinfo.type==PFM_PMU_TYPE_CORE) &&
++					( _papi_hwi_system_info.hw_info.vendor == PAPI_VENDOR_ARM)) {
++					if (strlen(_papi_hwi_system_info.hw_info.model_string) == 0) {
++						strSize = sizeof(_papi_hwi_system_info.hw_info.model_string);
++						strncpy( _papi_hwi_system_info.hw_info.model_string, pinfo.desc, strSize - 1);
++					}
++				}
+ 			}
+ 
+ 			if (pmu_type==PMU_TYPE_UNCORE) {
+commit 85003c716d76eff47607fa0967537c6cf63d8348
+Author: Steve Walk <swalk.cavium@gmail.com>
+Date:   Fri Jun 8 15:50:50 2018 -0400
+
+    enable Cavium ThunderX2 support
+
+diff --git a/src/papi_events.csv b/src/papi_events.csv
+index bb11f61d3..46827f180 100644
+--- a/src/papi_events.csv
++++ b/src/papi_events.csv
+@@ -1841,6 +1841,31 @@ PRESET,PAPI_L2_DCR,NOT_DERIVED,L2D_READ_ACCESS
+ PRESET,PAPI_L2_DCW,NOT_DERIVED,L2D_WRITE_ACCESS
+ PRESET,PAPI_L2_LDM,NOT_DERIVED,L2D_READ_REFILL
+ PRESET,PAPI_L2_STM,NOT_DERIVED,L2D_WRITE_REFILL
++
++#####################
++# ARM ThunderX2     #
++#####################
++CPU,arm_thunderx2
++#
++PRESET,PAPI_TOT_INS,NOT_DERIVED,INST_RETIRED
++PRESET,PAPI_TOT_CYC,NOT_DERIVED,CPU_CYCLES
++PRESET,PAPI_FP_INS,NOT_DERIVED,VFP_SPEC
++PRESET,PAPI_VEC_INS,NOT_DERIVED,ASE_SPEC
++PRESET,PAPI_BR_INS,NOT_DERIVED,BR_RETIRED
++PRESET,PAPI_LD_INS,NOT_DERIVED,LD_RETIRED
++PRESET,PAPI_SR_INS,NOT_DERIVED,ST_RETIRED
++PRESET,PAPI_L1_DCA,DERIVED_ADD,L1D_CACHE_RD,L1D_CACHE_WR
++PRESET,PAPI_L1_DCM,NOT_DERIVED,L1D_CACHE_REFILL
++PRESET,PAPI_L1_DCR,NOT_DERIVED,L1D_CACHE_RD
++PRESET,PAPI_L1_DCW,NOT_DERIVED,L1D_CACHE_WR
++PRESET,PAPI_L1_ICA,NOT_DERIVED,L1I_CACHE
++PRESET,PAPI_L1_ICM,NOT_DERIVED,L1I_CACHE_REFILL
++PRESET,PAPI_L2_DCH,NOT_DERIVED,L2D_CACHE
++PRESET,PAPI_L2_DCM,NOT_DERIVED,L2D_CACHE_REFILL
++PRESET,PAPI_L2_DCR,NOT_DERIVED,L2D_CACHE_RD
++PRESET,PAPI_L2_DCW,NOT_DERIVED,L2D_CACHE_WR
++PRESET,PAPI_L2_LDM,NOT_DERIVED,L2D_CACHE_REFILL_RD
++
+ #
+ CPU,mips_74k
+ #
+commit 9a44d82928ed17ba2ff21eb88b89c5829d0ea30e
+Author: Steve Kaufmann <steven.kaufmann@hpe.com>
+Date:   Wed Jun 24 14:08:08 2020 -0400
+
+    Added PAPI preset support for Fujitsu A64FX.
+    
+    Signed-off-by: Heike Jagode <jagode@icl.utk.edu>
+
+diff --git a/src/papi_events.csv b/src/papi_events.csv
+index 8e96adfbd..1b5c15542 100644
+--- a/src/papi_events.csv
++++ b/src/papi_events.csv
+@@ -1877,6 +1877,21 @@ PRESET,PAPI_L2_DCR,NOT_DERIVED,L2D_CACHE_RD
+ PRESET,PAPI_L2_DCW,NOT_DERIVED,L2D_CACHE_WR
+ PRESET,PAPI_L2_LDM,NOT_DERIVED,L2D_CACHE_REFILL_RD
+ 
++#########################
++# ARM Fujitsu A64FX     #
++#########################
++CPU,arm_a64fx
++#
++PRESET,PAPI_TOT_INS,NOT_DERIVED,INST_RETIRED
++PRESET,PAPI_TOT_CYC,NOT_DERIVED,CPU_CYCLES
++PRESET,PAPI_FP_INS,NOT_DERIVED,VFP_SPEC
++PRESET,PAPI_VEC_INS,NOT_DERIVED,ASE_SPEC
++PRESET,PAPI_L1_DCM,NOT_DERIVED,L1D_CACHE_REFILL
++PRESET,PAPI_L1_ICA,NOT_DERIVED,L1I_CACHE
++PRESET,PAPI_L1_ICM,NOT_DERIVED,L1I_CACHE_REFILL
++PRESET,PAPI_L2_DCH,NOT_DERIVED,L2D_CACHE
++PRESET,PAPI_L2_DCM,NOT_DERIVED,L2D_CACHE_REFILL
++
+ #
+ CPU,mips_74k
+ #
+commit b87ac4beda096086e0040f8ec1b44c4791a9739c
+Author: Masahiko, Yamada <yamada.masahiko@fujitsu.com>
+Date:   Mon Dec 14 14:06:22 2020 +0900
+
+    Corrected typo for A64FX support (PAPI_L2_DCH is a typo of PAPI_L2_DCA)
+
+diff --git a/src/papi_events.csv b/src/papi_events.csv
+index fd75f9371..164f05641 100644
+--- a/src/papi_events.csv
++++ b/src/papi_events.csv
+@@ -1937,7 +1937,7 @@ PRESET,PAPI_VEC_INS,NOT_DERIVED,ASE_SPEC
+ PRESET,PAPI_L1_DCM,NOT_DERIVED,L1D_CACHE_REFILL
+ PRESET,PAPI_L1_ICA,NOT_DERIVED,L1I_CACHE
+ PRESET,PAPI_L1_ICM,NOT_DERIVED,L1I_CACHE_REFILL
+-PRESET,PAPI_L2_DCH,NOT_DERIVED,L2D_CACHE
++PRESET,PAPI_L2_DCA,NOT_DERIVED,L2D_CACHE
+ PRESET,PAPI_L2_DCM,NOT_DERIVED,L2D_CACHE_REFILL
+ 
+ #
+commit 869864f813f0681b5c9a4b65de2135c8708a2afb
+Author: Masahiko, Yamada <yamada.masahiko@fujitsu.com>
+Date:   Mon Dec 14 19:34:59 2020 +0900
+
+    Add or modify various A64FX support events, including floating point events (PAPI_FP_OPS, PAPI_SP_OPS, PAPI_DP_OPS).
+
+diff --git a/src/papi_events.csv b/src/papi_events.csv
+index 164f05641..9192b1041 100644
+--- a/src/papi_events.csv
++++ b/src/papi_events.csv
+@@ -1930,15 +1930,46 @@ PRESET,PAPI_L2_LDM,NOT_DERIVED,L2D_CACHE_REFILL_RD
+ #########################
+ CPU,arm_a64fx
+ #
++PRESET,PAPI_PRF_DM,DERIVED_SUB,L2D_CACHE_REFILL_PRF,L2D_CACHE_MIBMCH_PRF
++PRESET,PAPI_MEM_SCY,NOT_DERIVED,LD_COMP_WAIT_L2_MISS
++PRESET,PAPI_STL_ICY,DERIVED_ADD,STALL_FRONTEND,STALL_BACKEND
++PRESET,PAPI_STL_CCY,NOT_DERIVED,0INST_COMMIT
++PRESET,PAPI_FUL_CCY,DERIVED_SUB,CPU_CYCLES,0INST_COMMIT,1INST_COMMIT,2INST_COMMIT,3INST_COMMIT,4INST_COMMIT
++PRESET,PAPI_HW_INT,DERIVED_ADD,EXC_IRQ,EXC_FIQ
++PRESET,PAPI_BR_MSP,NOT_DERIVED,BR_MIS_PRED
++PRESET,PAPI_BR_PRC,DERIVED_SUB,BR_PRED,BR_MIS_PRED
++PRESET,PAPI_FMA_INS,NOT_DERIVED,FP_FMA_SPEC
+ PRESET,PAPI_TOT_INS,NOT_DERIVED,INST_RETIRED
+ PRESET,PAPI_TOT_CYC,NOT_DERIVED,CPU_CYCLES
+ PRESET,PAPI_FP_INS,NOT_DERIVED,VFP_SPEC
++PRESET,PAPI_LD_INS,NOT_DERIVED,LD_SPEC
++PRESET,PAPI_SR_INS,NOT_DERIVED,ST_SPEC
++PRESET,PAPI_BR_INS,NOT_DERIVED,BR_PRED
+ PRESET,PAPI_VEC_INS,NOT_DERIVED,ASE_SPEC
++PRESET,PAPI_RES_STL,NOT_DERIVED,STALL_BACKEND
++PRESET,PAPI_LST_INS,NOT_DERIVED,LDST_SPEC
++PRESET,PAPI_SYC_INS,DERIVED_ADD,ISB_SPEC,DSB_SPEC,DMB_SPEC
++PRESET,PAPI_L1_DCA,NOT_DERIVED,L1D_CACHE
++PRESET,PAPI_L1_DCH,DERIVED_SUB,L1D_CACHE,L1D_CACHE_REFILL
+ PRESET,PAPI_L1_DCM,NOT_DERIVED,L1D_CACHE_REFILL
+ PRESET,PAPI_L1_ICA,NOT_DERIVED,L1I_CACHE
++PRESET,PAPI_L1_ICH,DERIVED_SUB,L1I_CACHE,L1I_CACHE_REFILL
+ PRESET,PAPI_L1_ICM,NOT_DERIVED,L1I_CACHE_REFILL
++PRESET,PAPI_L1_TCA,DERIVED_ADD,L1D_CACHE,L1I_CACHE
++PRESET,PAPI_L1_TCH,DERIVED_POSTFIX,N0|N1|-|N2|+|N3|-|,L1D_CACHE,L1D_CACHE_REFILL,L1I_CACHE,L1I_CACHE_REFILL
++PRESET,PAPI_L1_TCM,DERIVED_ADD,L1D_CACHE_REFILL,L1I_CACHE_REFILL
+ PRESET,PAPI_L2_DCA,NOT_DERIVED,L2D_CACHE
+-PRESET,PAPI_L2_DCM,NOT_DERIVED,L2D_CACHE_REFILL
++PRESET,PAPI_L2_DCH,DERIVED_POSTFIX,N0|N1|-|N2|+|N3|+|,L2D_CACHE,L2D_CACHE_REFILL,L2D_SWAP_DM,L2D_CACHE_MIBMCH_PRF
++PRESET,PAPI_L2_DCM,DERIVED_SUB,L2D_CACHE_REFILL,L2D_SWAP_DM,L2D_CACHE_MIBMCH_PRF
++PRESET,PAPI_L2_TCA,NOT_DERIVED,L2D_CACHE
++PRESET,PAPI_L2_TCH,DERIVED_POSTFIX,N0|N1|-|N2|+|N3|+|,L2D_CACHE,L2D_CACHE_REFILL,L2D_SWAP_DM,L2D_CACHE_MIBMCH_PRF
++PRESET,PAPI_L2_TCM,DERIVED_SUB,L2D_CACHE_REFILL,L2D_SWAP_DM,L2D_CACHE_MIBMCH_PRF
++PRESET,PAPI_TLB_DM,NOT_DERIVED,L2D_TLB_REFILL
++PRESET,PAPI_TLB_IM,NOT_DERIVED,L2I_TLB_REFILL
++PRESET,PAPI_TLB_TL,DERIVED_ADD,L2D_TLB_REFILL,L2I_TLB_REFILL
++PRESET,PAPI_FP_OPS,DERIVED_POSTFIX,N0|512|128|/|*|N1|+|,FP_SCALE_OPS_SPEC,FP_FIXED_OPS_SPEC
++PRESET,PAPI_SP_OPS,DERIVED_POSTFIX,N0|512|128|/|*|N1|+|,FP_SP_SCALE_OPS_SPEC,FP_SP_FIXED_OPS_SPEC
++PRESET,PAPI_DP_OPS,DERIVED_POSTFIX,N0|512|128|/|*|N1|+|,FP_DP_SCALE_OPS_SPEC,FP_DP_FIXED_OPS_SPEC
+ 
+ #
+ CPU,mips_74k
+commit 7a3c22763ef2ba00a2b8cb069c3501f35ecb13de
+Author: Masahiko, Yamada <yamada.masahiko@fujitsu.com>
+Date:   Tue Dec 15 13:43:43 2020 +0900
+
+    modify PAPI_FP_INS and PAPI_VEC_INS for A64FX supports
+
+diff --git a/src/papi_events.csv b/src/papi_events.csv
+index 9192b1041..7b4ceb674 100644
+--- a/src/papi_events.csv
++++ b/src/papi_events.csv
+@@ -1941,11 +1941,11 @@ PRESET,PAPI_BR_PRC,DERIVED_SUB,BR_PRED,BR_MIS_PRED
+ PRESET,PAPI_FMA_INS,NOT_DERIVED,FP_FMA_SPEC
+ PRESET,PAPI_TOT_INS,NOT_DERIVED,INST_RETIRED
+ PRESET,PAPI_TOT_CYC,NOT_DERIVED,CPU_CYCLES
+-PRESET,PAPI_FP_INS,NOT_DERIVED,VFP_SPEC
++PRESET,PAPI_FP_INS,NOT_DERIVED,FP_SPEC
+ PRESET,PAPI_LD_INS,NOT_DERIVED,LD_SPEC
+ PRESET,PAPI_SR_INS,NOT_DERIVED,ST_SPEC
+ PRESET,PAPI_BR_INS,NOT_DERIVED,BR_PRED
+-PRESET,PAPI_VEC_INS,NOT_DERIVED,ASE_SPEC
++PRESET,PAPI_VEC_INS,NOT_DERIVED,SIMD_INST_RETIRED
+ PRESET,PAPI_RES_STL,NOT_DERIVED,STALL_BACKEND
+ PRESET,PAPI_LST_INS,NOT_DERIVED,LDST_SPEC
+ PRESET,PAPI_SYC_INS,DERIVED_ADD,ISB_SPEC,DSB_SPEC,DMB_SPEC
+commit 530d4763fb8e6dd52109387bd58c8c1305fd6b63
+Author: Masahiko, Yamada <yamada.masahiko@fujitsu.com>
+Date:   Fri Feb 12 15:01:21 2021 +0900
+
+    remove PAPI_L1_DCA and PAPI_L1_DCH for a64fx
+    
+    There seems to be a problem with PAPI_L1_DCA and PAPI_L1_DCH for a64fx that prefetch overcounts.
+    I delete (comment out) PAPI_L1_DCA and PAPI_L1_DCH for a64fx from the papi_events.csv file.
+    I will issue the pullrequest again once I have identified how to handle the overcount.
+
+diff --git a/src/papi_events.csv b/src/papi_events.csv
+index 7b4ceb674..0f5ec8344 100644
+--- a/src/papi_events.csv
++++ b/src/papi_events.csv
+@@ -1949,8 +1949,8 @@ PRESET,PAPI_VEC_INS,NOT_DERIVED,SIMD_INST_RETIRED
+ PRESET,PAPI_RES_STL,NOT_DERIVED,STALL_BACKEND
+ PRESET,PAPI_LST_INS,NOT_DERIVED,LDST_SPEC
+ PRESET,PAPI_SYC_INS,DERIVED_ADD,ISB_SPEC,DSB_SPEC,DMB_SPEC
+-PRESET,PAPI_L1_DCA,NOT_DERIVED,L1D_CACHE
+-PRESET,PAPI_L1_DCH,DERIVED_SUB,L1D_CACHE,L1D_CACHE_REFILL
++#PRESET,PAPI_L1_DCA,NOT_DERIVED,L1D_CACHE
++#PRESET,PAPI_L1_DCH,DERIVED_SUB,L1D_CACHE,L1D_CACHE_REFILL
+ PRESET,PAPI_L1_DCM,NOT_DERIVED,L1D_CACHE_REFILL
+ PRESET,PAPI_L1_ICA,NOT_DERIVED,L1I_CACHE
+ PRESET,PAPI_L1_ICH,DERIVED_SUB,L1I_CACHE,L1I_CACHE_REFILL
+commit 340f68940234f2db181147fc249907b4f1293e62
+Author: Masahiko, Yamada <yamada.masahiko@fujitsu.com>
+Date:   Tue Feb 16 17:16:24 2021 +0900
+
+    remove PAPI_L1_TCA and PAPI_L1_TCH for a64fx
+    
+    PAPI_L1_TCA and PAPI_L1_TCH for a64fx measure L1D_CACHE just like PAPI_L1_DCA and PAPI_L1_DCH,
+    so I delete (comment out) PAPI_L1_TCA and PAPI_L1_TCH for a64fx from the papi_events.csv file.
+
+diff --git a/src/papi_events.csv b/src/papi_events.csv
+index 0f5ec8344..4ef647959 100644
+--- a/src/papi_events.csv
++++ b/src/papi_events.csv
+@@ -1955,8 +1955,8 @@ PRESET,PAPI_L1_DCM,NOT_DERIVED,L1D_CACHE_REFILL
+ PRESET,PAPI_L1_ICA,NOT_DERIVED,L1I_CACHE
+ PRESET,PAPI_L1_ICH,DERIVED_SUB,L1I_CACHE,L1I_CACHE_REFILL
+ PRESET,PAPI_L1_ICM,NOT_DERIVED,L1I_CACHE_REFILL
+-PRESET,PAPI_L1_TCA,DERIVED_ADD,L1D_CACHE,L1I_CACHE
+-PRESET,PAPI_L1_TCH,DERIVED_POSTFIX,N0|N1|-|N2|+|N3|-|,L1D_CACHE,L1D_CACHE_REFILL,L1I_CACHE,L1I_CACHE_REFILL
++#PRESET,PAPI_L1_TCA,DERIVED_ADD,L1D_CACHE,L1I_CACHE
++#PRESET,PAPI_L1_TCH,DERIVED_POSTFIX,N0|N1|-|N2|+|N3|-|,L1D_CACHE,L1D_CACHE_REFILL,L1I_CACHE,L1I_CACHE_REFILL
+ PRESET,PAPI_L1_TCM,DERIVED_ADD,L1D_CACHE_REFILL,L1I_CACHE_REFILL
+ PRESET,PAPI_L2_DCA,NOT_DERIVED,L2D_CACHE
+ PRESET,PAPI_L2_DCH,DERIVED_POSTFIX,N0|N1|-|N2|+|N3|+|,L2D_CACHE,L2D_CACHE_REFILL,L2D_SWAP_DM,L2D_CACHE_MIBMCH_PRF
