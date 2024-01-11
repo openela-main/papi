@@ -8,7 +8,7 @@
 Summary: Performance Application Programming Interface
 Name: papi
 Version: 5.6.0
-Release: 16%{?dist}
+Release: 19%{?dist}
 License: BSD
 Group: Development/System
 Requires: papi-libs = %{version}-%{release}
@@ -21,10 +21,13 @@ Patch4: papi-thread_init.patch
 Patch5: papi-mx.patch
 Patch6: papi-bz1908126.patch
 Patch7: papi-rhbz1918721.patch
-Patch8: papi-rhbz2037417.patch
 Patch9: papi-rhbz2037426.patch
 Patch10: papi-rhbz2037427.patch
-Patch11: papi-zen.patch
+Patch20: papi-fastread.patch
+Patch21: papi-arm64fastread.patch
+Patch30: papi-560_600eventupdate.patch
+Patch31: papi-701eventupdate.patch
+Patch40: papi-granularity.patch
 BuildRequires: autoconf
 BuildRequires: doxygen
 BuildRequires: ncurses-devel
@@ -33,8 +36,8 @@ BuildRequires: kernel-headers >= 2.6.32
 BuildRequires: chrpath
 BuildRequires: lm_sensors-devel
 %if %{without bundled_libpfm}
-BuildRequires: libpfm-devel >= 4.10.1-3
-BuildRequires: libpfm-static >= 4.10.1-3
+BuildRequires: libpfm-devel >= 4.13.0-1
+BuildRequires: libpfm-static >= 4.13.0-1
 %endif
 # Following required for net component
 BuildRequires: net-tools
@@ -95,10 +98,13 @@ the PAPI user-space libraries and interfaces.
 %patch5 -p1
 %patch6 -p1
 %patch7 -p1
-%patch8 -p1
 %patch9 -p1
 %patch10 -p1
-%patch11 -p1
+%patch20 -p1
+%patch21 -p1
+%patch30 -p1
+%patch31 -p1
+%patch40 -p1
 
 %build
 %if %{without bundled_libpfm}
@@ -181,6 +187,15 @@ chrpath --delete $RPM_BUILD_ROOT%{_libdir}/*.so*
 %{_libdir}/*.a
 
 %changelog
+* Wed Jul 19 2023 William Cohen <wcohen@redhat.com> - 5.6.0-19
+- Fix granularity setting (rhbz2221846)
+
+* Fri May 5 2023 William Cohen <wcohen@redhat.com> - 5.6.0-18
+- Add event presets for Arm Neoverse processors (rhbz2111982, rhbz2111988)
+
+* Thu Apr 27 2023 William Cohen <wcohen@redhat.com> - 5.6.0-17
+- Improve aarch64 read speed. (rhbz2161146)
+
 * Fri May 6 2022 William Cohen <wcohen@redhat.com> - 5.6.0-16
 - AMD Zen2/3 support (rhbz2071558)
 

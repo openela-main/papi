@@ -1,0 +1,90 @@
+commit c754f3bf1763358aaf70c0d64bc6cc2df29d8fec
+Author: Vince Weaver <vincent.weaver@maine.edu>
+Date:   Thu Jan 10 20:42:56 2019 -0500
+
+    perf_event: fix granularity setting for attached processes
+    
+    the old code was setting the granularity wrong when attaching to a CPU.
+
+diff --git a/src/components/perf_event/perf_event.c b/src/components/perf_event/perf_event.c
+index 1f4bbcee..2f2f380e 100644
+--- a/src/components/perf_event/perf_event.c
++++ b/src/components/perf_event/perf_event.c
+@@ -684,11 +684,23 @@ open_pe_events( pe_context_t *ctx, pe_control_t *ctl )
+ 	int i, ret = PAPI_OK;
+ 	long pid;
+ 
+-	if (ctl->granularity==PAPI_GRN_SYS) {
+-		pid = -1;
++
++	/* Set the pid setting */
++	/* If attached, this is the pid of process we are attached to. */
++	/* If GRN_THRD then it is 0 meaning current process only */
++	/* If GRN_SYS then it is -1 meaning all procs on this CPU */
++	/* Note if GRN_SYS then CPU must be specified, not -1 */
++
++	if (ctl->attached) {
++		pid = ctl->tid;
+ 	}
+ 	else {
+-		pid = ctl->tid;
++		if (ctl->granularity==PAPI_GRN_SYS) {
++			pid = -1;
++		}
++		else {
++			pid = 0;
++		}
+ 	}
+ 
+ 	for( i = 0; i < ctl->num_events; i++ ) {
+@@ -1650,6 +1662,7 @@ _pe_ctl( hwd_context_t *ctx, int code, _papi_int_option_t *option )
+ 	      return ret;
+ 	   }
+ 
++	   pe_ctl->attached = 1;
+ 	   pe_ctl->tid = option->attach.tid;
+ 
+ 	   /* If events have been already been added, something may */
+@@ -1662,7 +1675,9 @@ _pe_ctl( hwd_context_t *ctx, int code, _papi_int_option_t *option )
+       case PAPI_DETACH:
+ 	   pe_ctl = ( pe_control_t *) ( option->attach.ESI->ctl_state );
+ 
++	   pe_ctl->attached = 0;
+ 	   pe_ctl->tid = 0;
++
+ 	   return PAPI_OK;
+ 
+       case PAPI_CPU_ATTACH:
+@@ -1676,11 +1691,6 @@ _pe_ctl( hwd_context_t *ctx, int code, _papi_int_option_t *option )
+ 	   }
+ 	   /* looks like we are allowed so set cpu number */
+ 
+-	   /* this tells the kernel not to count for a thread   */
+-	   /* should we warn if we try to set both?  perf_event */
+-	   /* will reject it.                                   */
+-	   pe_ctl->tid = -1;
+-
+ 	   pe_ctl->cpu = option->cpu.cpu_num;
+ 
+ 	   return PAPI_OK;
+@@ -1696,7 +1706,7 @@ _pe_ctl( hwd_context_t *ctx, int code, _papi_int_option_t *option )
+ 	      return ret;
+ 	   }
+ 	   /* looks like we are allowed, so set event set level counting domains */
+-       pe_ctl->domain = option->domain.domain;
++	pe_ctl->domain = option->domain.domain;
+ 	   return PAPI_OK;
+ 
+       case PAPI_GRANUL:
+diff --git a/src/components/perf_event/perf_event_lib.h b/src/components/perf_event/perf_event_lib.h
+index f4ad0c5d..0c50ab9f 100644
+--- a/src/components/perf_event/perf_event_lib.h
++++ b/src/components/perf_event/perf_event_lib.h
+@@ -30,6 +30,7 @@ typedef struct {
+   unsigned int overflow;          /* overflow enable                   */
+   unsigned int inherit;           /* inherit enable                    */
+   unsigned int overflow_signal;   /* overflow signal                   */
++  unsigned int attached;          /* attached to a process             */
+   int cidx;                       /* current component                 */
+   int cpu;                        /* which cpu to measure              */
+   pid_t tid;                      /* thread we are monitoring          */
