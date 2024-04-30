@@ -11,7 +11,7 @@
 Summary: Performance Application Programming Interface
 Name: papi
 Version: 6.0.0
-Release: 15%{?dist}
+Release: 16%{?dist}
 License: BSD
 Requires: papi-libs = %{version}-%{release}
 URL: http://icl.cs.utk.edu/papi/
@@ -29,6 +29,7 @@ Patch7: papi-rhbz1923967.patch
 Patch21: papi-arm64fastread.patch
 Patch31: papi-701eventupdate.patch
 Patch40: papi-thread_init.patch
+Patch41: papi-71eventupdate.patch
 BuildRequires: make
 BuildRequires: autoconf
 BuildRequires: doxygen
@@ -104,6 +105,7 @@ the PAPI user-space libraries and interfaces.
 %patch21 -p1
 %patch31 -p1
 %patch40 -p1
+%patch41 -p1
 
 %build
 
@@ -196,6 +198,9 @@ chrpath --delete $RPM_BUILD_ROOT%{_libdir}/*.so*
 %endif
 
 %changelog
+* Fri Nov 17 2023 William Cohen <wcohen@redhat.com> - 6.0.0-16
+- Update papi event presets (RHEL-9333, RHEL-9334, RHEL-9335)
+
 * Fri Jun 16 2023 William Cohen <wcohen@redhat.com> - 6.0.0-15
 - Address thread initialization order. (RHBZ#2215582)
 
