@@ -8,7 +8,7 @@
 Summary: Performance Application Programming Interface
 Name: papi
 Version: 5.6.0
-Release: 19%{?dist}
+Release: 20%{?dist}
 License: BSD
 Group: Development/System
 Requires: papi-libs = %{version}-%{release}
@@ -28,6 +28,7 @@ Patch21: papi-arm64fastread.patch
 Patch30: papi-560_600eventupdate.patch
 Patch31: papi-701eventupdate.patch
 Patch40: papi-granularity.patch
+Patch41: papi-71eventupdate.patch
 BuildRequires: autoconf
 BuildRequires: doxygen
 BuildRequires: ncurses-devel
@@ -105,6 +106,7 @@ the PAPI user-space libraries and interfaces.
 %patch30 -p1
 %patch31 -p1
 %patch40 -p1
+%patch41 -p1
 
 %build
 %if %{without bundled_libpfm}
@@ -187,6 +189,9 @@ chrpath --delete $RPM_BUILD_ROOT%{_libdir}/*.so*
 %{_libdir}/*.a
 
 %changelog
+* Fri Nov 17 2023 William Cohen <wcohen@redhat.com> - 5.6.0-20
+- Update papi event presets (RHEL-9320, RHEL-9336, RHEL-9337)
+
 * Wed Jul 19 2023 William Cohen <wcohen@redhat.com> - 5.6.0-19
 - Fix granularity setting (rhbz2221846)
 
