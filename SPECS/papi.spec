@@ -10,26 +10,16 @@
 %{!?with_pcp: %global with_pcp 1}
 Summary: Performance Application Programming Interface
 Name: papi
-Version: 6.0.0
-Release: 16%{?dist}
-License: BSD
+Version: 7.2.0
+Release: 1%{?dist}
+License: BSD-3-Clause
 Requires: papi-libs = %{version}-%{release}
 URL: http://icl.cs.utk.edu/papi/
-# The upstream papi tar.gz file include iozone source code in it.
-# The license for iozone source code is not compatible, so it needs
-# to be eliminated from the srpm.
-# The iozone code has been removed from the upstream papi git repo
-# so when papi is rebased to a newer version it can be used as is.
-Source0: http://icl.cs.utk.edu/projects/papi/downloads/%{name}-%{version}-noiozone.tar.gz
-Patch1: papi-python3.patch
-Patch4: papi-config.patch
-Patch5: papi-nostatic.patch
-Patch6: papi-lto.patch
-Patch7: papi-rhbz1923967.patch
-Patch21: papi-arm64fastread.patch
-Patch31: papi-701eventupdate.patch
-Patch40: papi-thread_init.patch
-Patch41: papi-71eventupdate.patch
+Source0: http://icl.cs.utk.edu/projects/papi/downloads/%{name}-%{version}.tar.gz
+Patch1: papi-nostatic.patch
+Patch2: papi-avail-path-fix.patch
+Patch3: papi-revert-event-depr.patch
+Patch4: papi-revert-arm-test.patch
 BuildRequires: make
 BuildRequires: autoconf
 BuildRequires: doxygen
@@ -63,12 +53,14 @@ PAPI provides a programmer interface to monitor the performance of
 running programs.
 
 %package libs
+License: BSD-3-Clause
 Summary: Libraries for PAPI clients
 %description libs
 This package contains the run-time libraries for any application that wishes
 to use PAPI.
 
 %package devel
+License: BSD-3-Clause
 Summary: Header files for the compiling programs with PAPI
 Requires: papi = %{version}-%{release}
 Requires: papi-libs = %{version}-%{release}
@@ -79,6 +71,7 @@ libraries and interfaces. This is required for rebuilding any program
 that uses PAPI.
 
 %package testsuite
+License: BSD-3-Clause
 Summary: Set of tests for checking PAPI functionality
 Requires: papi = %{version}-%{release}
 Requires: papi-libs = %{version}-%{release}
@@ -88,6 +81,7 @@ that PAPI functions on particular hardware.
 
 %if %{with_static}
 %package static
+License: BSD-3-Clause
 Summary: Static libraries for the compiling programs with PAPI
 Requires: papi = %{version}-%{release}
 %description static
@@ -97,15 +91,10 @@ the PAPI user-space libraries and interfaces.
 
 %prep
 %setup -q
-%patch1 -p1 -b .python3
-%patch4 -p1
-%patch5 -p1
-%patch6 -p1
-%patch7 -p1
-%patch21 -p1
-%patch31 -p1
-%patch40 -p1
-%patch41 -p1
+%patch 1 -p1 -b papi-nostatic.patch
+%patch 2 -p1 -b papi-avail-path-fix.patch
+%patch 3 -p1 -b revert-event-depr.patch
+%patch 4 -p1 -b revert-arm-test.patch
 
 %build
 
@@ -139,7 +128,7 @@ autoconf
 %configure --with-perf-events \
 %{?libpfm_config} \
 %{?static_lib_config} \
---with-shared-lib=yes --with-shlib --with-shlib-tools \
+--with-shared-lib=yes --with-shlib-tools \
 --with-components="appio coretemp example infiniband lmsensors lustre micpower mx net %{?pcp_enable} rapl stealtime"
 # implicit enabled components: perf_event perf_event_uncore
 #components currently left out because of build configure/build issues
@@ -160,7 +149,8 @@ rm -rf $RPM_BUILD_ROOT
 cd src
 make DESTDIR=$RPM_BUILD_ROOT LDCONFIG=/bin/true install-all
 
-chrpath --delete $RPM_BUILD_ROOT%{_libdir}/*.so*
+# Scrub the rpath/runpath from all the binaries.
+find %{buildroot} -type f -executable ! -iname "*.py" ! -iname "*.sh" | xargs chrpath --delete
 
 %files
 %{_bindir}/*
@@ -177,6 +167,7 @@ chrpath --delete $RPM_BUILD_ROOT%{_libdir}/*.so*
 
 %files devel
 %{_includedir}/*.h
+%{_includedir}/*.hpp
 %if %{with bundled_libpfm}
 %{_includedir}/perfmon/*.h
 %endif
@@ -198,6 +189,13 @@ chrpath --delete $RPM_BUILD_ROOT%{_libdir}/*.so*
 %endif
 
 %changelog
+* Mon Nov 03 2025 RHEL Packaging Agent <jotnar@redhat.com> - 7.2.0-1
+- Rebase to papi 7.2.0
+- Update license tag to BSD-3-Clause
+- Remove old patches and add new patches for 7.2.0 compatibility
+- Update configure options and package files
+- Resolves: RHEL-121673
+
 * Fri Nov 17 2023 William Cohen <wcohen@redhat.com> - 6.0.0-16
 - Update papi event presets (RHEL-9333, RHEL-9334, RHEL-9335)
 
