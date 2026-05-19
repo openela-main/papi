@@ -14,15 +14,16 @@
 %endif
 Summary: Performance Application Programming Interface
 Name: papi
-Version: 7.1.0
-Release: 6%{?dist}
+Version: 7.2.0
+Release: 1%{?dist}
 License: BSD-3-Clause
 Requires: papi-libs = %{version}-%{release}
 URL: http://icl.cs.utk.edu/papi/
 Source0: http://icl.cs.utk.edu/projects/papi/downloads/%{name}-%{version}.tar.gz
-Patch1: papi-python3.patch
-Patch5: papi-nostatic.patch
-Patch6: papi-libsde.patch
+Patch1: papi-nostatic.patch
+Patch2: papi-avail-path-fix.patch
+Patch3: papi-revert-event-depr.patch
+Patch4: papi-revert-arm-test.patch
 BuildRequires: make
 BuildRequires: autoconf
 BuildRequires: doxygen
@@ -94,9 +95,10 @@ the PAPI user-space libraries and interfaces.
 
 %prep
 %setup -q
-%patch 1 -p1 -b .python3
-%patch 5 -p1
-%patch 6 -p1 -b .flags
+%patch 1 -p1 -b papi-nostatic.patch
+%patch 2 -p1 -b papi-avail-path-fix.patch
+%patch 3 -p1 -b revert-event-depr.patch
+%patch 4 -p1 -b revert-arm-test.patch
 
 %build
 
@@ -191,6 +193,10 @@ find %{buildroot} -type f -executable ! -iname "*.py" ! -iname "*.sh" | xargs ch
 %endif
 
 %changelog
+* Wed Nov 05 2025 RHEL Packaging Agent <jotnar@redhat.com> - 7.2.0-1
+- Rebase to papi-7.2.0.
+- Resolves: RHEL-121674
+
 * Tue Oct 29 2024 Troy Dawson <tdawson@redhat.com> - 7.1.0-6
 - Bump release for October 2024 mass rebuild:
   Resolves: RHEL-64018
