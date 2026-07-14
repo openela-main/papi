@@ -11,7 +11,7 @@
 Summary: Performance Application Programming Interface
 Name: papi
 Version: 7.2.0
-Release: 1%{?dist}
+Release: 1%{?dist}.1
 License: BSD-3-Clause
 Requires: papi-libs = %{version}-%{release}
 URL: http://icl.cs.utk.edu/papi/
@@ -20,6 +20,7 @@ Patch1: papi-nostatic.patch
 Patch2: papi-avail-path-fix.patch
 Patch3: papi-revert-event-depr.patch
 Patch4: papi-revert-arm-test.patch
+Patch5: papi-deterministic-fortran-headers.patch
 BuildRequires: make
 BuildRequires: autoconf
 BuildRequires: doxygen
@@ -95,6 +96,7 @@ the PAPI user-space libraries and interfaces.
 %patch 2 -p1 -b papi-avail-path-fix.patch
 %patch 3 -p1 -b revert-event-depr.patch
 %patch 4 -p1 -b revert-arm-test.patch
+%patch 5 -p1 -b deterministic-fortran-headers.patch
 
 %build
 
@@ -189,6 +191,10 @@ find %{buildroot} -type f -executable ! -iname "*.py" ! -iname "*.sh" | xargs ch
 %endif
 
 %changelog
+* Thu Jun 04 2026 Aaron Merey <amerey@redhat.com> - 7.2.0-1.1
+- Generate Fortran headers deterministically to fix multilib file
+  conflict on papi-devel. (RHEL-145965, RHEL-180678)
+
 * Mon Nov 03 2025 RHEL Packaging Agent <jotnar@redhat.com> - 7.2.0-1
 - Rebase to papi 7.2.0
 - Update license tag to BSD-3-Clause

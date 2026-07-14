@@ -1,0 +1,82 @@
+From 06272f907a14c027faa72441371eb449d654f81f Mon Sep 17 00:00:00 2001
+From: Aaron Merey <amerey@redhat.com>
+Date: Thu, 4 Jun 2026 09:23:33 -0400
+Subject: [PATCH] genpapifdef.pl: emit Fortran headers in a deterministic order
+
+The generated Fortran headers (fpapi.h, f77papi.h, f90papi.h) are
+produced at configure time by iterating over Perl hashes (keys %defs /
+keys %presets).  Since Perl 5.18 hash key iteration order is randomized
+per process, so every build emits the same set of constants in a
+different line order.
+
+The constant values are architecture independent, but the differing
+line order makes the i686 and x86_64 copies of each header
+byte-different.  RPM's multilib file check compares file content, so
+installing both multilib variants of papi-devel fails with a file
+conflict on /usr/include/{f77papi,f90papi,fpapi}.h.
+
+Sort the keys before emitting so the output is reproducible and
+identical across builds and architectures.
+
+---
+ src/maint/genpapifdef.pl | 12 ++++++------
+ 1 file changed, 6 insertions(+), 6 deletions(-)
+
+diff --git a/src/maint/genpapifdef.pl b/src/maint/genpapifdef.pl
+index 2b54ba7..feb37b8 100755
+--- a/src/maint/genpapifdef.pl
++++ b/src/maint/genpapifdef.pl
+@@ -225,7 +225,7 @@ sub write_defs_fort {
+     printf STDOUT "C General purpose defines\n";
+     printf STDOUT "C\n\n";
+ 
+-    foreach my $key (keys %defs) {
++    foreach my $key (sort keys %defs) {
+         # skip unneeded definition
+         if ($key =~ /PAPI_MH_/ || $key =~ /PAPI_PRESET_/ || $key =~ /PAPI_DEF_ITIMER/) { next; }
+         printf STDOUT "#define %-18s %s\n", $key, ($papi_defs{$key} == 0x80000000) ? "((-2147483647) - 1)" : $papi_defs{$key};
+@@ -248,7 +248,7 @@ sub write_defs_f77 {
+     printf STDOUT "! General purpose defines\n";
+     printf STDOUT "!\n\n";
+ 
+-    foreach my $key (keys %defs) {
++    foreach my $key (sort keys %defs) {
+         # skip unneeded definition
+         if ($key =~ /PAPI_MH_/ || $key =~ /PAPI_PRESET_/ || $key =~ /PAPI_DEF_ITIMER/) { next; }
+         printf STDOUT "INTEGER %-18s\nPARAMETER(%s=%s)\n", $key, $key, ($papi_defs{$key} == 0x80000000) ? "((-2147483647) - 1)" : $papi_defs{$key};
+@@ -271,7 +271,7 @@ sub write_defs_f90 {
+     printf STDOUT "! General purpose defines\n";
+     printf STDOUT "!\n\n";
+ 
+-    foreach my $key (keys %defs) {
++    foreach my $key (sort keys %defs) {
+         # skip unneeded definition
+         if ($key =~ /PAPI_MH_/ || $key =~ /PAPI_PRESET_/ || $key =~ /PAPI_DEF_ITIMER/) { next; }
+         printf STDOUT "INTEGER, PARAMETER :: %-18s = %s\n", $key, ($papi_defs{$key} == 0x80000000) ? "((-2147483647) - 1)" : $papi_defs{$key};
+@@ -286,7 +286,7 @@ sub write_presets_fort {
+     printf STDOUT "C PAPI preset event values\n";
+     printf STDOUT "C\n\n";
+ 
+-    foreach my $key (keys %presets) {
++    foreach my $key (sort keys %presets) {
+         if ($papi_presets{$key} == -2147483648) {
+             printf STDOUT "#define %-18s ((-2147483647) - 1)\n", $key;
+         } else {
+@@ -303,7 +303,7 @@ sub write_presets_f77 {
+     printf STDOUT "! PAPI preset event values\n";
+     printf STDOUT "!\n\n";
+ 
+-    foreach my $key (keys %presets) {
++    foreach my $key (sort keys %presets) {
+         if ($papi_presets{$key} == -2147483648) {
+             printf STDOUT "INTEGER %-18s\nPARAMETER(%s=(-2147483647) - 1)\n", $key, $key;
+         } else {
+@@ -320,7 +320,7 @@ sub write_presets_f90 {
+     printf STDOUT "! PAPI preset event values\n";
+     printf STDOUT "!\n\n";
+ 
+-    foreach my $key (keys %presets) {
++    foreach my $key (sort keys %presets) {
+         if ($papi_presets{$key} == -2147483648) {
+             printf STDOUT "INTEGER, PARAMETER :: %-18s = ((-2147483647) - 1)\n", $key;
+         } else {
